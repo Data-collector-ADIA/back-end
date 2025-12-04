@@ -205,7 +205,7 @@ async def main():
 	prompt = "Search for 'browser automation' on DuckDuckGo"
 	
 	print("Starting agent stream...")
-	async for update in run_agent_stream(prompt, max_steps=5):
+	async for update in run_agent_stream(prompt, max_steps=5 ):
 		# Print JSON output
 		print(json.dumps(update, indent=2, default=str))
 

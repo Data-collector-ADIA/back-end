@@ -1,267 +1,324 @@
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"">
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/774a46d5-27a0-490c-b7d0-e65fcbbfa358">
-  <img alt="Shows a black Browser Use Logo in light color mode and a white one in dark color mode." src="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"  width="full">
-</picture>
+# Backend Service
 
-<div align="center">
-    <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"">
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/6797d09b-8ac3-4cb9-ba07-b289e080765a">
-    <img alt="The AI browser agent." src="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"  width="400">
-    </picture>
-</div>
+The Backend Service is the core orchestration layer that coordinates browser automation tasks. It uses the browser_use library to execute AI-driven browser automation, connecting to the Browser Service for browser instances and the Database Service for data persistence.
 
-<div align="center">
-<img src="https://media.browser-use.tools/badges/package" height="48" alt="Browser-Use Package Download Statistics">
-</div>
+## Overview
 
----
+This service:
+- Receives browser automation task requests
+- Manages task execution using browser_use
+- Connects to remote browsers via Browser Service
+- Saves task outputs to Database Service
+- Streams real-time updates via WebSocket
 
-<div align="center">
-<a href="#demos"><img src="https://media.browser-use.tools/badges/demos" alt="Demos"></a>
-<img width="16" height="1" alt="">
-<a href="https://docs.browser-use.com"><img src="https://media.browser-use.tools/badges/docs" alt="Docs"></a>
-<img width="16" height="1" alt="">
-<a href="https://browser-use.com/posts"><img src="https://media.browser-use.tools/badges/blog" alt="Blog"></a>
-<img width="16" height="1" alt="">
-<a href="https://browsermerch.com"><img src="https://media.browser-use.tools/badges/merch" alt="Merch"></a>
-<img width="100" height="1" alt="">
-<a href="https://github.com/browser-use/browser-use"><img src="https://media.browser-use.tools/badges/github" alt="Github Stars"></a>
-<img width="4" height="1" alt="">
-<a href="https://x.com/intent/user?screen_name=browser_use"><img src="https://media.browser-use.tools/badges/twitter" alt="Twitter"></a>
-<img width="4 height="1" alt="">
-<a href="https://link.browser-use.com/discord"><img src="https://media.browser-use.tools/badges/discord" alt="Discord"></a>
-<img width="4" height="1" alt="">
-<a href="https://cloud.browser-use.com"><img src="https://media.browser-use.tools/badges/cloud" height="48" alt="Browser-Use Cloud"></a>
-</div>
+## Features
 
-</br>
+- AI-powered browser automation using browser_use
+- Remote browser support via CDP URLs
+- Real-time task streaming via WebSocket
+- Integration with Browser and Database services
+- Task lifecycle management
+- Error handling and recovery
 
-# 🤖 LLM Quickstart
+## Installation
 
-1. Direct your favorite coding agent (Cursor, ClaudeS, etc) to [Agents.md](https://docs.browser-use.com/llms-full.txt)
-2. Prompt away!
+### Prerequisites
 
-<br/>
+- Python 3.11 or higher
+- Google API Key (for Gemini LLM)
+- Browser Service running (port 8001)
+- Database Service running (port 8002)
 
-# 👋 Human Quickstart
+### Setup
 
-**1. Create environment with [uv](https://docs.astral.sh/uv/) (Python>=3.11):**
+1. Install Python dependencies:
 ```bash
-uv init
+pip install -r requirements.txt
 ```
 
-**2. Install Browser-Use package:**
+2. Set up environment variables:
+
+Create a `.env` file:
 ```bash
-#  We ship every day - use the latest version!
-uv add browser-use
-uv sync
+GOOGLE_API_KEY=your_google_api_key_here
+BROWSER_SERVICE_URL=http://localhost:8001
+DATABASE_SERVICE_URL=http://localhost:8002
+BACKEND_SERVICE_PORT=8000
 ```
 
-**3. Get your API key from [Browser Use Cloud](https://cloud.browser-use.com/new-api-key) and add it to your `.env` file (new signups get $10 free credits):**
-```
-# .env
-BROWSER_USE_API_KEY=your-key
-```
-
-**4. Install Chromium browser:**
+3. Install browser_use library:
 ```bash
-uvx browser-use install
+pip install browser-use
 ```
 
-**5. Run your first agent:**
+## Usage
+
+### Start the Service
+
+```bash
+python api_server.py
+```
+
+Or with custom port:
+```bash
+BACKEND_SERVICE_PORT=8000 python api_server.py
+```
+
+The service will start on `http://localhost:8000` by default.
+
+## API Endpoints
+
+### Health Check
+```bash
+GET /health
+```
+
+### Start Task
+```bash
+POST /tasks/start
+Content-Type: application/json
+
+{
+  "task_prompt": "Search for browser automation on DuckDuckGo",
+  "max_steps": 100,
+  "user_id": "user123",      // Optional
+  "browser_name": "firefox", // Optional: firefox, chrome, webkit
+  "browser_port": 9999       // Optional
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "task_id": "507f1f77bcf86cd799439011",
+  "message": "Task started successfully"
+}
+```
+
+### Get Task Status
+```bash
+GET /tasks/{task_id}/status
+```
+
+Response:
+```json
+{
+  "success": true,
+  "status": "running",  // pending, running, completed, failed, cancelled
+  "message": "Task found"
+}
+```
+
+### Cancel Task
+```bash
+POST /tasks/{task_id}/cancel
+```
+
+### WebSocket Stream
+
+Connect to receive real-time task updates:
+```javascript
+const ws = new WebSocket('ws://localhost:8000/tasks/{task_id}/stream');
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Update:', data);
+};
+```
+
+## Remote Browser Configuration
+
+The service uses remote browsers via CDP URLs. When starting a task:
+
+1. Requests a browser instance from Browser Service
+2. Receives a CDP URL (e.g., `http://localhost:9999`)
+3. Configures browser_use to use the remote browser:
 ```python
-from browser_use import Agent, Browser, ChatBrowserUse
-import asyncio
-
-async def example():
-    browser = Browser(
-        # use_cloud=True,  # Uncomment to use a stealth browser on Browser Use Cloud
-    )
-
-    llm = ChatBrowserUse()
-
-    agent = Agent(
-        task="Find the number of stars of the browser-use repo",
-        llm=llm,
-        browser=browser,
-    )
-
-    history = await agent.run()
-    return history
-
-if __name__ == "__main__":
-    history = asyncio.run(example())
-```
-
-Check out the [library docs](https://docs.browser-use.com) and the [cloud docs](https://docs.cloud.browser-use.com) for more!
-
-<br/>
-
-# 🔥 Deploy on Sandboxes
-
-We handle agents, browsers, persistence, auth, cookies, and LLMs. The agent runs right next to the browser for minimal latency.
-
-```python
-from browser_use import Browser, sandbox, ChatBrowserUse
-from browser_use.agent.service import Agent
-import asyncio
-
-@sandbox()
-async def my_task(browser: Browser):
-    agent = Agent(task="Find the top HN post", browser=browser, llm=ChatBrowserUse())
-    await agent.run()
-
-# Just call it like any async function
-asyncio.run(my_task())
-```
-
-See [Going to Production](https://docs.browser-use.com/production) for more details.
-
-<br/>
-
-# 🚀 Template Quickstart
-
-**Want to get started even faster?** Generate a ready-to-run template:
-
-```bash
-uvx browser-use init --template default
-```
-
-This creates a `browser_use_default.py` file with a working example. Available templates:
-- `default` - Minimal setup to get started quickly
-- `advanced` - All configuration options with detailed comments
-- `tools` - Examples of custom tools and extending the agent
-
-You can also specify a custom output path:
-```bash
-uvx browser-use init --template default --output my_agent.py
-```
-
-<br/>
-
-# Demos
-
-
-### 📋 Form-Filling
-#### Task = "Fill in this job application with my resume and information."
-![Job Application Demo](https://github.com/user-attachments/assets/57865ee6-6004-49d5-b2c2-6dff39ec2ba9)
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/apply_to_job.py)
-
-
-### 🍎 Grocery-Shopping
-#### Task = "Put this list of items into my instacart."
-
-https://github.com/user-attachments/assets/a6813fa7-4a7c-40a6-b4aa-382bf88b1850
-
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/buy_groceries.py)
-
-
-### 💻 Personal-Assistant.
-#### Task = "Help me find parts for a custom PC."
-
-https://github.com/user-attachments/assets/ac34f75c-057a-43ef-ad06-5b2c9d42bf06
-
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/pcpartpicker.py)
-
-
-### 💡See [more examples here ↗](https://docs.browser-use.com/examples) and give us a star!
-
-<br/>
-
-## Integrations, hosting, custom tools, MCP, and more on our [Docs ↗](https://docs.browser-use.com)
-
-<br/>
-
-# FAQ
-
-<details>
-<summary><b>What's the best model to use?</b></summary>
-
-We optimized **ChatBrowserUse()** specifically for browser automation tasks. On avg it completes tasks 3-5x faster than other models with SOTA accuracy.
-
-**Pricing (per 1M tokens):**
-- Input tokens: $0.20
-- Output tokens: $2.00
-- Cached tokens: $0.02
-
-For other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
-</details>
-
-
-<details>
-<summary><b>Can I use custom tools with the agent?</b></summary>
-
-Yes! You can add custom tools to extend the agent's capabilities:
-
-```python
-from browser_use import Tools
-
-tools = Tools()
-
-@tools.action(description='Description of what this tool does.')
-def custom_tool(param: str) -> str:
-    return f"Result: {param}"
-
-agent = Agent(
-    task="Your task",
-    llm=llm,
-    browser=browser,
-    tools=tools,
+browser = Browser(
+    headless=True,
+    cdp_url="http://localhost:9999"
 )
 ```
 
-</details>
+### Using Browser-Use Cloud Browser
 
-<details>
-<summary><b>Can I use this for free?</b></summary>
+You can also use browser-use cloud service:
+```python
+browser = Browser(
+    use_cloud=True,  # Automatically provisions a cloud browser
+)
 
-Yes! Browser-Use is open source and free to use. You only need to choose an LLM provider (like OpenAI, Google, ChatBrowserUse, or run local models with Ollama).
-</details>
+# Or with advanced settings:
+browser = Browser(
+    cloud_profile_id='your-profile-id',
+    cloud_proxy_country_code='us',
+    cloud_timeout=30,
+)
+```
 
-<details>
-<summary><b>How do I handle authentication?</b></summary>
+For cloud browser, you need:
+- API key from [cloud.browser-use.com](https://cloud.browser-use.com/new-api-key)
+- Set `BROWSER_USE_API_KEY` environment variable
 
-Check out our authentication examples:
-- [Using real browser profiles](https://github.com/browser-use/browser-use/blob/main/examples/browser/real_browser.py) - Reuse your existing Chrome profile with saved logins
-- If you want to use temporary accounts with inbox, choose AgentMail
-- To sync your auth profile with the remote browser, run `curl -fsSL https://browser-use.com/profile.sh | BROWSER_USE_API_KEY=XXXX sh` (replace XXXX with your API key)
+### Using Custom CDP URL
 
-These examples show how to maintain sessions and handle authentication seamlessly.
-</details>
+You can also use any CDP URL from any provider:
+```python
+browser = Browser(
+    cdp_url="http://remote-server:9222"
+)
+```
 
-<details>
-<summary><b>How do I solve CAPTCHAs?</b></summary>
+## Task Execution Flow
 
-For CAPTCHA handling, you need better browser fingerprinting and proxies. Use [Browser Use Cloud](https://cloud.browser-use.com) which provides stealth browsers designed to avoid detection and CAPTCHA challenges.
-</details>
+1. **Task Creation**: Service receives task request and creates task in Database Service
+2. **Browser Acquisition**: Requests browser instance from Browser Service
+3. **Agent Initialization**: Creates browser_use Agent with remote browser
+4. **Execution**: Runs agent with step-by-step callbacks
+5. **Streaming**: Sends updates via WebSocket and saves to Database
+6. **Completion**: Saves final results and updates task status
 
-<details>
-<summary><b>How do I go into production?</b></summary>
+## Stream Data Format
 
-Chrome can consume a lot of memory, and running many agents in parallel can be tricky to manage.
+The service streams different types of updates:
 
-For production use cases, use our [Browser Use Cloud API](https://cloud.browser-use.com) which handles:
-- Scalable browser infrastructure
-- Memory management
-- Proxy rotation
-- Stealth browser fingerprinting
-- High-performance parallel execution
-</details>
+### Task Start
+```json
+{
+  "type": "task_start",
+  "task": "Search for browser automation",
+  "max_steps": 100
+}
+```
 
-<br/>
+### Step Update
+```json
+{
+  "type": "step",
+  "step_number": 1,
+  "url": "https://duckduckgo.com",
+  "thinking": "I need to search...",
+  "next_goal": "Click the search box",
+  "actions": [...],
+  "results": [...]
+}
+```
 
-<div align="center">
+### Task Complete
+```json
+{
+  "type": "task_complete",
+  "is_done": true,
+  "is_successful": true,
+  "final_result": "Successfully searched...",
+  "total_steps": 5,
+  "urls_visited": ["https://duckduckgo.com"],
+  "errors": []
+}
+```
 
-**Tell your computer what to do, and it gets it done.**
+### Error
+```json
+{
+  "type": "error",
+  "error": "Error message",
+  "error_type": "ExceptionType"
+}
+```
 
-<img src="https://github.com/user-attachments/assets/06fa3078-8461-4560-b434-445510c1766f" width="400"/>
+## Configuration
 
-[![Twitter Follow](https://img.shields.io/twitter/follow/Magnus?style=social)](https://x.com/intent/user?screen_name=mamagnus00)
-&emsp;&emsp;&emsp;
-[![Twitter Follow](https://img.shields.io/twitter/follow/Gregor?style=social)](https://x.com/intent/user?screen_name=gregpr07)
+### Environment Variables
 
-</div>
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOOGLE_API_KEY` | Required | Google API key for Gemini LLM |
+| `BROWSER_SERVICE_URL` | `http://localhost:8001` | Browser Service endpoint |
+| `DATABASE_SERVICE_URL` | `http://localhost:8002` | Database Service endpoint |
+| `BACKEND_SERVICE_PORT` | `8000` | Backend service port |
+| `BROWSER_USE_API_KEY` | Optional | For cloud browser service |
 
-<div align="center"> Made with ❤️ in Zurich and San Francisco </div>
+## Architecture
+
+The service uses:
+- **FastAPI** for REST API and WebSocket support
+- **browser_use** for AI browser automation
+- **ChatGoogle** (Gemini) as the default LLM
+- **httpx** for HTTP client requests to other services
+
+## Integration Points
+
+### Browser Service
+- `POST /browser/start` - Request browser instance
+- `GET /browser/{port}/connection` - Get browser CDP URL
+- `POST /browser/stop` - Release browser instance
+
+### Database Service
+- `POST /tasks` - Create task
+- `POST /tasks/{id}/outputs` - Save step output
+- `PUT /tasks/{id}/status` - Update task status
+- `GET /tasks/{id}` - Get task details
+- `GET /tasks/{id}/history` - Get task history
+
+## LLM Configuration
+
+Default LLM is Google Gemini (`gemini-flash-latest`). To change:
+
+1. Import a different LLM from browser_use:
+```python
+from browser_use import ChatOpenAI, ChatAnthropic, ChatGroq
+
+llm = ChatOpenAI(model='gpt-4')  # or ChatAnthropic, ChatGroq, etc.
+```
+
+2. Update the agent initialization in `api_server.py`
+
+## Troubleshooting
+
+### Browser Connection Issues
+- Verify Browser Service is running
+- Check CDP URL is accessible
+- Ensure browser is actually started on the port
+
+### Task Execution Fails
+- Check Google API key is set
+- Verify LLM quota/limits
+- Check browser_use library version
+- Review logs for specific errors
+
+### WebSocket Connection Issues
+- Verify CORS settings
+- Check firewall/network rules
+- Ensure task ID is valid
+
+## Development
+
+### Project Structure
+```
+back-end/
+├── api_server.py      # Main FastAPI server
+├── app.py            # Original standalone version
+├── requirements.txt  # Python dependencies
+└── README.md        # This file
+```
+
+### Testing
+
+Test the service:
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Start a task
+curl -X POST http://localhost:8000/tasks/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_prompt": "Search for Python tutorials",
+    "max_steps": 10
+  }'
+```
+
+## License
+
+Part of the Data Collector ADIA project.
