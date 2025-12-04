@@ -1,21 +1,21 @@
 # Backend Service
 
-The Backend Service is the core orchestration layer that coordinates browser automation tasks. It uses the browser_use library to execute AI-driven browser automation, connecting to the Browser Service for browser instances and the Database Service for data persistence.
+The Backend Service is the core orchestration layer that coordinates browser automation tasks. It uses the browser_use library to execute AI-driven browser automation, connecting to the Browser Service and Database Service via gRPC.
 
 ## Overview
 
 This service:
-- Receives browser automation task requests
+- Receives browser automation task requests via gRPC
 - Manages task execution using browser_use
-- Connects to remote browsers via Browser Service
-- Saves task outputs to Database Service
-- Streams real-time updates via WebSocket
+- Connects to remote browsers via Browser Service (gRPC)
+- Saves task outputs to Database Service (gRPC)
+- Coordinates all service interactions
 
 ## Features
 
 - AI-powered browser automation using browser_use
 - Remote browser support via CDP URLs
-- Real-time task streaming via WebSocket
+- gRPC-based communication for better performance
 - Integration with Browser and Database services
 - Task lifecycle management
 - Error handling and recovery
@@ -26,8 +26,8 @@ This service:
 
 - Python 3.11 or higher
 - Google API Key (for Gemini LLM)
-- Browser Service running (port 8001)
-- Database Service running (port 8002)
+- Browser Service running (port 50051)
+- Database Service running (port 50052)
 
 ### Setup
 
@@ -41,283 +41,291 @@ pip install -r requirements.txt
 Create a `.env` file:
 ```bash
 GOOGLE_API_KEY=your_google_api_key_here
-BROWSER_SERVICE_URL=http://localhost:8001
-DATABASE_SERVICE_URL=http://localhost:8002
-BACKEND_SERVICE_PORT=8000
+BROWSER_SERVICE_HOST=localhost
+BROWSER_SERVICE_PORT=50051
+DATABASE_SERVICE_HOST=localhost
+DATABASE_SERVICE_PORT=50052
+BACKEND_SERVICE_PORT=50050
 ```
 
-3. Install browser_use library:
+Get your Google API key from: https://aistudio.google.com/apikey
+
+3. Generate protobuf files (first time only):
 ```bash
-pip install browser-use
-```
-
-## Usage
-
-### Start the Service
-
-```bash
-python api_server.py
-```
-
-Or with custom port:
-```bash
-BACKEND_SERVICE_PORT=8000 python api_server.py
-```
-
-The service will start on `http://localhost:8000` by default.
-
-## API Endpoints
-
-### Health Check
-```bash
-GET /health
-```
-
-### Start Task
-```bash
-POST /tasks/start
-Content-Type: application/json
-
-{
-  "task_prompt": "Search for browser automation on DuckDuckGo",
-  "max_steps": 100,
-  "user_id": "user123",      // Optional
-  "browser_name": "firefox", // Optional: firefox, chrome, webkit
-  "browser_port": 9999       // Optional
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "task_id": "507f1f77bcf86cd799439011",
-  "message": "Task started successfully"
-}
-```
-
-### Get Task Status
-```bash
-GET /tasks/{task_id}/status
-```
-
-Response:
-```json
-{
-  "success": true,
-  "status": "running",  // pending, running, completed, failed, cancelled
-  "message": "Task found"
-}
-```
-
-### Cancel Task
-```bash
-POST /tasks/{task_id}/cancel
-```
-
-### WebSocket Stream
-
-Connect to receive real-time task updates:
-```javascript
-const ws = new WebSocket('ws://localhost:8000/tasks/{task_id}/stream');
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Update:', data);
-};
-```
-
-## Remote Browser Configuration
-
-The service uses remote browsers via CDP URLs. When starting a task:
-
-1. Requests a browser instance from Browser Service
-2. Receives a CDP URL (e.g., `http://localhost:9999`)
-3. Configures browser_use to use the remote browser:
-```python
-browser = Browser(
-    headless=True,
-    cdp_url="http://localhost:9999"
-)
-```
-
-### Using Browser-Use Cloud Browser
-
-You can also use browser-use cloud service:
-```python
-browser = Browser(
-    use_cloud=True,  # Automatically provisions a cloud browser
-)
-
-# Or with advanced settings:
-browser = Browser(
-    cloud_profile_id='your-profile-id',
-    cloud_proxy_country_code='us',
-    cloud_timeout=30,
-)
-```
-
-For cloud browser, you need:
-- API key from [cloud.browser-use.com](https://cloud.browser-use.com/new-api-key)
-- Set `BROWSER_USE_API_KEY` environment variable
-
-### Using Custom CDP URL
-
-You can also use any CDP URL from any provider:
-```python
-browser = Browser(
-    cdp_url="http://remote-server:9222"
-)
-```
-
-## Task Execution Flow
-
-1. **Task Creation**: Service receives task request and creates task in Database Service
-2. **Browser Acquisition**: Requests browser instance from Browser Service
-3. **Agent Initialization**: Creates browser_use Agent with remote browser
-4. **Execution**: Runs agent with step-by-step callbacks
-5. **Streaming**: Sends updates via WebSocket and saves to Database
-6. **Completion**: Saves final results and updates task status
-
-## Stream Data Format
-
-The service streams different types of updates:
-
-### Task Start
-```json
-{
-  "type": "task_start",
-  "task": "Search for browser automation",
-  "max_steps": 100
-}
-```
-
-### Step Update
-```json
-{
-  "type": "step",
-  "step_number": 1,
-  "url": "https://duckduckgo.com",
-  "thinking": "I need to search...",
-  "next_goal": "Click the search box",
-  "actions": [...],
-  "results": [...]
-}
-```
-
-### Task Complete
-```json
-{
-  "type": "task_complete",
-  "is_done": true,
-  "is_successful": true,
-  "final_result": "Successfully searched...",
-  "total_steps": 5,
-  "urls_visited": ["https://duckduckgo.com"],
-  "errors": []
-}
-```
-
-### Error
-```json
-{
-  "type": "error",
-  "error": "Error message",
-  "error_type": "ExceptionType"
-}
+cd ../shared
+python generate_protos.py
+cd ../back-end
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GOOGLE_API_KEY` | Required | Google API key for Gemini LLM |
-| `BROWSER_SERVICE_URL` | `http://localhost:8001` | Browser Service endpoint |
-| `DATABASE_SERVICE_URL` | `http://localhost:8002` | Database Service endpoint |
-| `BACKEND_SERVICE_PORT` | `8000` | Backend service port |
-| `BROWSER_USE_API_KEY` | Optional | For cloud browser service |
+```bash
+BACKEND_SERVICE_HOST=localhost          # Host to bind to (default: localhost)
+BACKEND_SERVICE_PORT=50050              # gRPC port (default: 50050)
+BROWSER_SERVICE_HOST=localhost          # Browser Service host (default: localhost)
+BROWSER_SERVICE_PORT=50051              # Browser Service port (default: 50051)
+DATABASE_SERVICE_HOST=localhost         # Database Service host (default: localhost)
+DATABASE_SERVICE_PORT=50052             # Database Service port (default: 50052)
+GOOGLE_API_KEY=your_api_key            # Required: Google Gemini API key
+```
+
+### Default Ports
+
+- **gRPC Service**: `50050`
+- **Browser Service**: `50051` (remote)
+- **Database Service**: `50052` (remote)
+
+## Usage
+
+### Start the Service
+
+**For Testing (Single Machine):**
+```bash
+# Run in a screen session
+screen -S backend-service
+python server.py
+# Press Ctrl+A then D to detach
+```
+
+**For Production (Separate Machine):**
+```bash
+export BACKEND_SERVICE_HOST=0.0.0.0
+export BACKEND_SERVICE_PORT=50050
+export BROWSER_SERVICE_HOST=browser-service-host
+export BROWSER_SERVICE_PORT=50051
+export DATABASE_SERVICE_HOST=database-service-host
+export DATABASE_SERVICE_PORT=50052
+export GOOGLE_API_KEY=your_api_key
+python server.py
+```
+
+### gRPC Methods
+
+The service exposes these gRPC methods:
+
+#### StartTask
+Start a new browser automation task.
+
+**Request:**
+```protobuf
+message StartTaskRequest {
+  string task_prompt = 1;
+  int32 max_steps = 2;
+  string user_id = 3;
+  string browser_name = 4;  // Optional: firefox, webkit, chrome
+  int32 browser_port = 5;   // Optional: specific browser port
+}
+```
+
+**Response:**
+```protobuf
+message StartTaskResponse {
+  bool success = 1;
+  string task_id = 2;
+  string message = 3;
+}
+```
+
+#### GetTaskStatus
+Get current task status.
+
+**Request:**
+```protobuf
+message GetTaskStatusRequest {
+  string task_id = 1;
+}
+```
+
+**Response:**
+```protobuf
+message GetTaskStatusResponse {
+  bool success = 1;
+  string status = 2;  // running, completed, failed, cancelled
+  string message = 3;
+}
+```
+
+#### CancelTask
+Cancel a running task.
+
+**Request:**
+```protobuf
+message CancelTaskRequest {
+  string task_id = 1;
+}
+```
+
+**Response:**
+```protobuf
+message CancelTaskResponse {
+  bool success = 1;
+  string message = 2;
+}
+```
 
 ## Architecture
 
 The service uses:
-- **FastAPI** for REST API and WebSocket support
-- **browser_use** for AI browser automation
-- **ChatGoogle** (Gemini) as the default LLM
-- **httpx** for HTTP client requests to other services
+- **gRPC** for RPC communication
+- **browser_use** for browser automation
+- **Google Gemini** (via browser_use) for AI agent
+- **Protocol Buffers** for type-safe messages
 
-## Integration Points
+## Integration with Other Services
 
 ### Browser Service
-- `POST /browser/start` - Request browser instance
-- `GET /browser/{port}/connection` - Get browser CDP URL
-- `POST /browser/stop` - Release browser instance
+The Backend Service connects to Browser Service via gRPC to:
+1. Request a browser instance (`StartBrowser`)
+2. Get CDP URL for browser connection (`GetBrowserConnection`)
+3. Release browser when done (`StopBrowser`)
 
 ### Database Service
-- `POST /tasks` - Create task
-- `POST /tasks/{id}/outputs` - Save step output
-- `PUT /tasks/{id}/status` - Update task status
-- `GET /tasks/{id}` - Get task details
-- `GET /tasks/{id}/history` - Get task history
+The Backend Service connects to Database Service via gRPC to:
+1. Create tasks before execution (`CreateTask`)
+2. Save step-by-step outputs during execution (`SaveTaskOutput`)
+3. Update task status as execution progresses (`UpdateTaskStatus`)
+4. Store final results when tasks complete
 
-## LLM Configuration
+## Task Execution Flow
 
-Default LLM is Google Gemini (`gemini-flash-latest`). To change:
+1. **Receive Task Request** - Frontend calls `StartTask` via gRPC
+2. **Create Task Record** - Backend calls Database Service `CreateTask`
+3. **Request Browser** - Backend calls Browser Service `StartBrowser`
+4. **Get CDP URL** - Backend receives CDP URL from Browser Service
+5. **Initialize Agent** - Backend creates browser_use Agent with CDP URL
+6. **Execute Task** - Agent runs browser automation
+7. **Save Outputs** - On each step, Backend calls Database Service `SaveTaskOutput`
+8. **Update Status** - On completion, Backend calls Database Service `UpdateTaskStatus`
+9. **Cleanup** - Backend calls Browser Service `StopBrowser`
 
-1. Import a different LLM from browser_use:
-```python
-from browser_use import ChatOpenAI, ChatAnthropic, ChatGroq
+## Testing
 
-llm = ChatOpenAI(model='gpt-4')  # or ChatAnthropic, ChatGroq, etc.
+### Using grpcurl
+
+```bash
+# List available services
+grpcurl -plaintext localhost:50050 list
+
+# Start task
+grpcurl -plaintext -d '{
+  "task_prompt": "Search for browser automation on DuckDuckGo",
+  "max_steps": 10,
+  "user_id": "test_user",
+  "browser_name": "firefox"
+}' localhost:50050 backend_service.BackendService/StartTask
+
+# Get task status
+grpcurl -plaintext -d '{"task_id": "your_task_id"}' \
+  localhost:50050 backend_service.BackendService/GetTaskStatus
 ```
-
-2. Update the agent initialization in `api_server.py`
 
 ## Troubleshooting
 
-### Browser Connection Issues
-- Verify Browser Service is running
-- Check CDP URL is accessible
-- Ensure browser is actually started on the port
+### Cannot Connect to Browser Service
+
+```bash
+# Verify Browser Service is running
+grpcurl -plaintext localhost:50051 list
+
+# Check environment variables
+echo $BROWSER_SERVICE_HOST
+echo $BROWSER_SERVICE_PORT
+```
+
+### Cannot Connect to Database Service
+
+```bash
+# Verify Database Service is running
+grpcurl -plaintext localhost:50052 list
+
+# Check environment variables
+echo $DATABASE_SERVICE_HOST
+echo $DATABASE_SERVICE_PORT
+```
+
+### Google API Key Issues
+
+```bash
+# Verify API key is set
+cat .env | grep GOOGLE_API_KEY
+
+# Test API key (if you have curl)
+curl "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=$GOOGLE_API_KEY"
+```
+
+### Port Already in Use
+
+```bash
+# Check what's using the port
+lsof -i :50050  # Linux/Mac
+netstat -an | findstr 50050  # Windows
+
+# Change port
+export BACKEND_SERVICE_PORT=50051
+python server.py
+```
+
+### Protobuf Import Errors
+
+```bash
+# Regenerate protobuf files
+cd ../shared
+python generate_protos.py
+```
 
 ### Task Execution Fails
-- Check Google API key is set
-- Verify LLM quota/limits
-- Check browser_use library version
-- Review logs for specific errors
 
-### WebSocket Connection Issues
-- Verify CORS settings
-- Check firewall/network rules
-- Ensure task ID is valid
+- Check all services are running
+- Verify browser service can start browsers
+- Check Google API quota/limits
+- Review service logs for specific errors
 
 ## Development
 
 ### Project Structure
 ```
 back-end/
-├── api_server.py      # Main FastAPI server
-├── app.py            # Original standalone version
-├── requirements.txt  # Python dependencies
-└── README.md        # This file
+├── server.py              # gRPC server
+├── app.py                 # Core browser automation logic
+├── browser_use/           # browser_use library
+├── requirements.txt       # Python dependencies
+├── QUICKSTART.md          # Quick start guide
+└── README.md              # This file
 ```
 
-### Testing
+### Running in Development
 
-Test the service:
 ```bash
-# Health check
-curl http://localhost:8000/health
+# Start service
+python server.py
 
-# Start a task
-curl -X POST http://localhost:8000/tasks/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_prompt": "Search for Python tutorials",
-    "max_steps": 10
-  }'
+# In another terminal, test with grpcurl
+grpcurl -plaintext localhost:50050 list
 ```
+
+## Deployment
+
+### Single Machine (Testing)
+
+Run in a screen session:
+```bash
+screen -S backend-service
+python server.py
+```
+
+### Separate Machine (Production)
+
+1. Install dependencies
+2. Set up environment variables
+3. Configure service addresses
+4. Run service: `python server.py`
+5. Expose port 50050
+
+## Quick Start
+
+See [QUICKSTART.md](QUICKSTART.md) for a quick setup guide.
 
 ## License
 
