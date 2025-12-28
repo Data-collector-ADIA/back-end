@@ -1,35 +1,48 @@
-"""
-Backend Service - Orchestrates browser automation tasks
-Connects to Browser Service and Database Service via HTTP REST APIs.
-Uses browser_use library with remote browser support.
-"""
-
 import asyncio
 import json
 import logging
 import os
-import uuid
-from typing import AsyncGenerator, Dict, Optional
+from typing import AsyncGenerator
 
-import httpx
-from browser_use import Agent, Browser, ChatGoogle
+import grpc
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from browser_use import Agent, Browser, ChatGoogle
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# Import browser service protobuf
+try:
+    import browser_service_pb2
+    import browser_service_pb2_grpc
+    PROTOBUF_AVAILABLE = True
+except ImportError:
+    logging.warning("Protobuf files not found. Browser service integration may not work.")
+    PROTOBUF_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Backend Service", version="1.0.0")
+# Service addresses
+BROWSER_SERVICE_HOST = os.getenv("BROWSER_SERVICE_HOST", "localhost")
+BROWSER_SERVICE_PORT = int(os.getenv("BROWSER_SERVICE_PORT", "50061"))
 
-# CORS middleware
+# Create FastAPI app
+app = FastAPI(
+    title="Browser Automation API",
+    description="API for browser automation with streaming results",
+    version="1.0.0"
+)
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,36 +51,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Service URLs (can be overridden via environment variables)
-BROWSER_SERVICE_URL = os.getenv("BROWSER_SERVICE_URL", "http://localhost:8001")
-DATABASE_SERVICE_URL = os.getenv("DATABASE_SERVICE_URL", "http://localhost:8002")
+# Global browser channel
+_browser_channel = None
 
-# HTTP client for service communication
-http_client = httpx.AsyncClient(timeout=30.0)
-
-# Active tasks tracking
-active_tasks: Dict[str, asyncio.Task] = {}
-
-
-# Pydantic models
-class StartTaskRequest(BaseModel):
-    task_prompt: str
-    max_steps: int = 100
-    user_id: Optional[str] = None
-    browser_name: str = "firefox"
-    browser_port: int = 9999
-
-
-class StartTaskResponse(BaseModel):
-    success: bool
-    task_id: Optional[str] = None
-    message: str
-
-
-class TaskStatusResponse(BaseModel):
-    success: bool
-    status: str
-    message: str
+def get_browser_stub():
+    global _browser_channel
+    if _browser_channel is None:
+        _browser_channel = grpc.insecure_channel(f"{BROWSER_SERVICE_HOST}:{BROWSER_SERVICE_PORT}")
+    return browser_service_pb2_grpc.BrowserServiceStub(_browser_channel)
 
 
 def _suppress_logging():
@@ -77,18 +68,13 @@ def _suppress_logging():
     # Create a null handler that discards all logs
     null_handler = logging.NullHandler()
     
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.handlers = [null_handler]
-    root_logger.setLevel(logging.CRITICAL)
-    
     # Configure browser_use loggers
     for logger_name in ['browser_use', 'browser_use.agent', 'browser_use.agent.service', 
                        'browser_use.tools', 'browser_use.browser', 'cdp_use']:
-        logger = logging.getLogger(logger_name)
-        logger.handlers = [null_handler]
-        logger.setLevel(logging.CRITICAL)
-        logger.propagate = False
+        logger_instance = logging.getLogger(logger_name)
+        logger_instance.handlers = [null_handler]
+        logger_instance.setLevel(logging.CRITICAL)
+        logger_instance.propagate = False
 
 
 def _format_step_data(agent: Agent, step_number: int) -> dict:
@@ -119,7 +105,7 @@ def _format_step_data(agent: Agent, step_number: int) -> dict:
         if last_item.metadata:
             step_data['timestamp'] = last_item.metadata.step_end_time
         
-        # Extract model output (thinking, evaluation, memory, goals)
+        # Extract model output
         if last_item.model_output:
             if hasattr(last_item.model_output, 'current_state'):
                 current_state = last_item.model_output.current_state
@@ -152,138 +138,128 @@ def _format_step_data(agent: Agent, step_number: int) -> dict:
     return step_data
 
 
-async def run_agent_task(
-    task_id: str,
-    prompt: str,
-    max_steps: int,
-    browser_cdp_url: str,
-    websocket: Optional[WebSocket] = None
-):
+async def run_agent_stream(prompt: str, max_steps: int = 100) -> AsyncGenerator[dict, None]:
     """
-    Run an agent task and stream updates
+    Run an agent with the given prompt and stream updates as JSON.
+    
+    Args:
+        prompt: The task prompt for the agent
+        max_steps: Maximum number of steps the agent can take
+        
+    Yields:
+        dict: JSON-serializable dictionaries containing step updates
     """
+    # Suppress all logging output
+    _suppress_logging()
+    
     browser = None
+    cdp_url = None
+    browser_port = 9999
+    
     try:
-        # Suppress logging
-        _suppress_logging()
+        # Get browser connection via gRPC
+        browser_client = get_browser_stub()
         
-        # Initialize browser with remote CDP URL
-        browser = Browser(
-            headless=True,
-            cdp_url=browser_cdp_url
+        # Start browser
+        start_request = browser_service_pb2.StartBrowserRequest(
+            browser_name="chrome",
+            port=browser_port
         )
+        browser_response = browser_client.StartBrowser(start_request)
         
-        # Initialize agent with Gemini
+        if not browser_response.success:
+            raise Exception(f"Failed to start browser: {browser_response.message}")
+        
+        cdp_url = browser_response.cdp_url
+        logger.info(f"Browser started, CDP URL: {cdp_url}")
+        
+        # Initialize agent
         llm = ChatGoogle(model='gemini-flash-latest')
+        browser = Browser(headless=True, cdp_url=cdp_url)
+        
+        # Start the browser
+        await browser.start()
+        
         agent = Agent(
             task=prompt,
             llm=llm,
             browser=browser,
+            include_attributes=['href', 'text', 'type', 'name', 'id'],
+            max_failures=2,
+            retry_delay=10,
         )
         
-        # Update task status to running
-        await http_client.put(
-            f"{DATABASE_SERVICE_URL}/tasks/{task_id}/status",
-            json={"status": "running", "final_result": None}
-        )
+        # Queue to collect step updates
+        update_queue = asyncio.Queue()
+        agent_task = None
         
-        # Send initial task start
-        if websocket:
-            await websocket.send_json({
-                'type': 'task_start',
-                'task': prompt,
-                'max_steps': max_steps,
-            })
+        # Define callback to queue step data
+        async def on_step_end(agent_instance: Agent):
+            step_data = _format_step_data(agent_instance, agent_instance.state.n_steps)
+            await update_queue.put(step_data)
         
-        await save_task_output(task_id, {
+        # Task to run the agent
+        async def run_agent():
+            try:
+                history = await agent.run(
+                    max_steps=max_steps,
+                    on_step_end=on_step_end,
+                )
+                
+                # Signal completion
+                final_result = history.final_result()
+                is_done = history.is_done()
+                is_successful = history.is_successful()
+                
+                await update_queue.put({
+                    'type': 'task_complete',
+                    'is_done': is_done,
+                    'is_successful': is_successful,
+                    'final_result': final_result,
+                    'total_steps': history.number_of_steps(),
+                    'urls_visited': history.urls(),
+                    'errors': history.errors(),
+                })
+            except Exception as e:
+                await update_queue.put({
+                    'type': 'error',
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                })
+            finally:
+                # Signal end of updates
+                await update_queue.put(None)
+        
+        # Yield initial task info
+        yield {
             'type': 'task_start',
             'task': prompt,
             'max_steps': max_steps,
-        }, 'task_start', 0)
-        
-        # Define callback to send step data
-        async def on_step_end(agent_instance: Agent):
-            step_number = agent_instance.state.n_steps
-            step_data = _format_step_data(agent_instance, step_number)
-            
-            # Send via WebSocket if available
-            if websocket:
-                try:
-                    await websocket.send_json(step_data)
-                except Exception as e:
-                    logger.error(f"Error sending WebSocket message: {e}")
-            
-            # Save to database
-            await save_task_output(task_id, step_data, 'step', step_number)
-        
-        # Run the agent
-        history = await agent.run(
-            max_steps=max_steps,
-            on_step_end=on_step_end,
-        )
-        
-        # Get final result
-        final_result = history.final_result()
-        is_done = history.is_done()
-        is_successful = history.is_successful()
-        
-        completion_data = {
-            'type': 'task_complete',
-            'is_done': is_done,
-            'is_successful': is_successful,
-            'final_result': final_result,
-            'total_steps': history.number_of_steps(),
-            'urls_visited': history.urls(),
-            'errors': history.errors(),
         }
         
-        # Send completion via WebSocket
-        if websocket:
-            try:
-                await websocket.send_json(completion_data)
-            except Exception as e:
-                logger.error(f"Error sending completion via WebSocket: {e}")
+        # Start agent task
+        agent_task = asyncio.create_task(run_agent())
         
-        # Save completion to database
-        await save_task_output(task_id, completion_data, 'task_complete', history.number_of_steps())
+        # Stream updates as they arrive
+        while True:
+            update = await update_queue.get()
+            if update is None:
+                break
+            yield update
         
-        # Update task status
-        status = "completed" if is_successful else "failed"
-        await http_client.put(
-            f"{DATABASE_SERVICE_URL}/tasks/{task_id}/status",
-            json={
-                "status": status,
-                "final_result": json.dumps(completion_data)
-            }
-        )
-        
+        # Wait for agent task to complete
+        if agent_task:
+            await agent_task
+            
     except Exception as e:
-        logger.error(f"Error running agent task {task_id}: {e}", exc_info=True)
-        
-        error_data = {
+        # Yield error information
+        yield {
             'type': 'error',
             'error': str(e),
             'error_type': type(e).__name__,
         }
-        
-        # Send error via WebSocket
-        if websocket:
-            try:
-                await websocket.send_json(error_data)
-            except Exception:
-                pass
-        
-        # Save error to database
-        await save_task_output(task_id, error_data, 'error', 0)
-        
-        # Update task status
-        await http_client.put(
-            f"{DATABASE_SERVICE_URL}/tasks/{task_id}/status",
-            json={
-                "status": "failed",
-                "final_result": json.dumps(error_data)
-            }
-        )
+        logger.error(f"Error in agent stream: {e}", exc_info=True)
+    
     finally:
         # Cleanup browser
         if browser:
@@ -292,198 +268,104 @@ async def run_agent_task(
             except Exception:
                 pass
         
-        # Remove from active tasks
-        if task_id in active_tasks:
-            del active_tasks[task_id]
+        # Stop browser via service
+        if cdp_url:
+            try:
+                browser_client = get_browser_stub()
+                stop_request = browser_service_pb2.StopBrowserRequest(port=browser_port)
+                browser_client.StopBrowser(stop_request)
+            except Exception as e:
+                logger.error(f"Error stopping browser via service: {e}")
 
 
-async def save_task_output(task_id: str, step_data: dict, output_type: str, step_number: int):
-    """Save task output to database service"""
-    try:
-        await http_client.post(
-            f"{DATABASE_SERVICE_URL}/tasks/{task_id}/outputs",
-            json={
-                "task_id": task_id,
-                "step_data": json.dumps(step_data, default=str),
-                "output_type": output_type,
-                "step_number": step_number
+# Request models
+class RunTaskRequest(BaseModel):
+    prompt: str
+    max_steps: int = 100
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "prompt": "Search for 'browser automation' on DuckDuckGo",
+                "max_steps": 10
             }
-        )
-    except Exception as e:
-        logger.error(f"Error saving task output: {e}")
+        }
 
 
-async def get_browser_connection(browser_name: str, browser_port: int) -> str:
-    """Get or start a browser and return CDP URL"""
-    try:
-        # Check if browser is already running
-        response = await http_client.get(f"{BROWSER_SERVICE_URL}/browser/{browser_port}/connection")
-        conn_data = response.json()
-        
-        if conn_data.get("running"):
-            return conn_data["cdp_url"]
-        
-        # Start browser
-        start_response = await http_client.post(
-            f"{BROWSER_SERVICE_URL}/browser/start",
-            json={
-                "browser_name": browser_name,
-                "port": browser_port
-            }
-        )
-        
-        start_data = start_response.json()
-        if not start_data.get("success"):
-            raise Exception(f"Failed to start browser: {start_data.get('message')}")
-        
-        return start_data["cdp_url"]
-        
-    except Exception as e:
-        logger.error(f"Error getting browser connection: {e}")
-        raise
-
-
-# API Endpoints
-@app.post("/tasks/start", response_model=StartTaskResponse)
-async def start_task(request: StartTaskRequest):
-    """Start a new browser automation task"""
-    try:
-        # Create task in database
-        db_response = await http_client.post(
-            f"{DATABASE_SERVICE_URL}/tasks",
-            json={
-                "task_prompt": request.task_prompt,
-                "max_steps": request.max_steps,
-                "user_id": request.user_id
-            }
-        )
-        
-        if db_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to create task in database")
-        
-        db_data = db_response.json()
-        task_id = db_data.get("task_id")
-        
-        if not task_id:
-            raise HTTPException(status_code=500, detail="Task ID not returned from database")
-        
-        # Get browser connection
-        browser_cdp_url = await get_browser_connection(request.browser_name, request.browser_port)
-        
-        # Start task asynchronously
-        task = asyncio.create_task(
-            run_agent_task(task_id, request.task_prompt, request.max_steps, browser_cdp_url)
-        )
-        active_tasks[task_id] = task
-        
-        return StartTaskResponse(
-            success=True,
-            task_id=task_id,
-            message="Task started successfully"
-        )
-    except Exception as e:
-        logger.error(f"Error starting task: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.websocket("/tasks/{task_id}/stream")
-async def stream_task(websocket: WebSocket, task_id: str):
-    """WebSocket endpoint for streaming task updates"""
-    await websocket.accept()
-    
-    try:
-        # Get task from database
-        task_response = await http_client.get(f"{DATABASE_SERVICE_URL}/tasks/{task_id}")
-        if task_response.status_code != 200:
-            await websocket.close(code=1008, reason="Task not found")
-            return
-        
-        task_data = task_response.json()
-        
-        # Get browser connection
-        browser_cdp_url = await get_browser_connection("firefox", 9999)
-        
-        # Run task and stream updates
-        await run_agent_task(
-            task_id,
-            task_data["task_prompt"],
-            task_data["max_steps"],
-            browser_cdp_url,
-            websocket
-        )
-        
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for task {task_id}")
-    except Exception as e:
-        logger.error(f"Error in WebSocket stream: {e}", exc_info=True)
-        try:
-            await websocket.close(code=1011, reason=str(e))
-        except Exception:
-            pass
-
-
-@app.get("/tasks/{task_id}/status", response_model=TaskStatusResponse)
-async def get_task_status(task_id: str):
-    """Get task status"""
-    try:
-        response = await http_client.get(f"{DATABASE_SERVICE_URL}/tasks/{task_id}")
-        
-        if response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Task not found")
-        
-        task_data = response.json()
-        
-        return TaskStatusResponse(
-            success=True,
-            status=task_data.get("status", "unknown"),
-            message="Task found"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: str):
-    """Cancel a running task"""
-    try:
-        if task_id in active_tasks:
-            task = active_tasks[task_id]
-            task.cancel()
-            del active_tasks[task_id]
-            
-            # Update task status
-            await http_client.put(
-                f"{DATABASE_SERVICE_URL}/tasks/{task_id}/status",
-                json={"status": "cancelled"}
-            )
-            
-            return {"success": True, "message": "Task cancelled"}
-        else:
-            raise HTTPException(status_code=404, detail="Task not found or not running")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error cancelling task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "name": "Browser Automation API",
+        "version": "1.0.0",
+        "endpoints": {
+            "run_task": "/api/v1/run",
+            "health": "/health"
+        }
+    }
 
 
 @app.get("/health")
-async def health_check():
+async def health():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "backend-service"}
+    return {"status": "healthy"}
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    await http_client.aclose()
+@app.post("/api/v1/run")
+async def run_task(request: RunTaskRequest):
+    """
+    Run a browser automation task and stream results as Server-Sent Events.
+    
+    The response is a stream of JSON objects, each representing a step or event:
+    - task_start: Initial task information
+    - step: Step-by-step progress with actions, results, and agent thinking
+    - task_complete: Final results when task finishes
+    - error: Error information if something fails
+    
+    Example:
+        ```python
+        import requests
+        
+        response = requests.post(
+            "http://localhost:8000/api/v1/run",
+            json={"prompt": "Search for AI news", "max_steps": 5},
+            stream=True
+        )
+        
+        for line in response.iter_lines():
+            if line:
+                data = json.loads(line.decode('utf-8').replace('data: ', ''))
+                print(data)
+        ```
+    """
+    try:
+        async def event_generator():
+            async for update in run_agent_stream(request.prompt, request.max_steps):
+                # Format as Server-Sent Event
+                yield f"data: {json.dumps(update, default=str)}\n\n"
+        
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in run_task endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("BACKEND_SERVICE_PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
-
+    
+    port = int(os.getenv("API_SERVER_PORT", "8000"))
+    uvicorn.run(
+        "api_server:app",
+        host="0.0.0.0",
+        port=port,
+        reload=True,
+        log_level="info"
+    )

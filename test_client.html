@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Automation API - Test Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: inherit;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .output {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .event {
+            margin-bottom: 15px;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            background: white;
+        }
+
+        .event-type {
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .event.task-start {
+            border-left-color: #4CAF50;
+        }
+
+        .event.task-start .event-type {
+            color: #4CAF50;
+        }
+
+        .event.step {
+            border-left-color: #2196F3;
+        }
+
+        .event.step .event-type {
+            color: #2196F3;
+        }
+
+        .event.task-complete {
+            border-left-color: #4CAF50;
+        }
+
+        .event.task-complete .event-type {
+            color: #4CAF50;
+        }
+
+        .event.error {
+            border-left-color: #f44336;
+        }
+
+        .event.error .event-type {
+            color: #f44336;
+        }
+
+        .event-details {
+            color: #555;
+            line-height: 1.6;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #667eea;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .status.idle {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status.running {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .status.complete {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Browser Automation API</h1>
+            <p>Test the streaming API with real-time updates</p>
+        </div>
+
+        <div class="card">
+            <div id="status" class="status idle">
+                <span>⏸️</span>
+                <span>Ready to run</span>
+            </div>
+
+            <form id="taskForm">
+                <div class="form-group">
+                    <label for="prompt">Task Prompt</label>
+                    <textarea id="prompt" name="prompt"
+                        placeholder="E.g., Search for 'browser automation' on DuckDuckGo"
+                        required>Go to duckduckgo.com and search for 'artificial intelligence'</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="maxSteps">Max Steps</label>
+                    <input type="number" id="maxSteps" name="maxSteps" value="5" min="1" max="100" required />
+                </div>
+
+                <button type="submit" class="btn" id="runBtn">
+                    Run Task
+                </button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2 style="margin-bottom: 15px; color: #333;">Output Stream</h2>
+            <div id="output" class="output">
+                <div style="color: #999; text-align: center; padding: 40px;">
+                    No events yet. Submit a task to see streaming results.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('taskForm');
+        const output = document.getElementById('output');
+        const status = document.getElementById('status');
+        const runBtn = document.getElementById('runBtn');
+
+        function updateStatus(state, message) {
+            status.className = `status ${state}`;
+
+            const icons = {
+                idle: '⏸️',
+                running: '▶️',
+                complete: '✅',
+                error: '❌'
+            };
+
+            status.innerHTML = `
+                <span>${icons[state] || '⏸️'}</span>
+                <span>${message}</span>
+                ${state === 'running' ? '<div class="loading"></div>' : ''}
+            `;
+        }
+
+        function addEvent(type, data) {
+            const event = document.createElement('div');
+            event.className = `event ${type}`;
+
+            let content = '';
+
+            if (type === 'task-start') {
+                content = `
+                    <div class="event-type">🚀 Task Started</div>
+                    <div class="event-details">
+                        <strong>Task:</strong> ${data.task}<br>
+                        <strong>Max Steps:</strong> ${data.max_steps}
+                    </div>
+                `;
+            } else if (type === 'step') {
+                const thinking = data.thinking || 'N/A';
+                const thinkingPreview = thinking.length > 100 ? thinking.substring(0, 100) + '...' : thinking;
+
+                content = `
+                    <div class="event-type">📍 Step ${data.step_number}</div>
+                    <div class="event-details">
+                        <strong>URL:</strong> ${data.url || 'N/A'}<br>
+                        <strong>Next Goal:</strong> ${data.next_goal || 'N/A'}<br>
+                        <strong>Thinking:</strong> ${thinkingPreview}<br>
+                        <strong>Actions:</strong> ${data.actions ? data.actions.length : 0} action(s)
+                    </div>
+                `;
+            } else if (type === 'task-complete') {
+                content = `
+                    <div class="event-type">✅ Task Complete</div>
+                    <div class="event-details">
+                        <strong>Success:</strong> ${data.is_successful ? 'Yes' : 'No'}<br>
+                        <strong>Total Steps:</strong> ${data.total_steps}<br>
+                        <strong>Result:</strong> ${data.final_result || 'N/A'}<br>
+                        <strong>URLs Visited:</strong> ${data.urls_visited ? data.urls_visited.join(', ') : 'N/A'}
+                    </div>
+                `;
+            } else if (type === 'error') {
+                content = `
+                    <div class="event-type">❌ Error</div>
+                    <div class="event-details">
+                        <strong>Type:</strong> ${data.error_type}<br>
+                        <strong>Message:</strong> ${data.error}
+                    </div>
+                `;
+            }
+
+            event.innerHTML = content;
+            output.appendChild(event);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const prompt = document.getElementById('prompt').value;
+            const maxSteps = parseInt(document.getElementById('maxSteps').value);
+
+            // Clear output
+            output.innerHTML = '';
+
+            // Update UI
+            runBtn.disabled = true;
+            updateStatus('running', 'Running task...');
+
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/run', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ prompt, max_steps: maxSteps })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const jsonStr = line.substring(6);
+                            const data = JSON.parse(jsonStr);
+                            addEvent(data.type.replace('_', '-'), data);
+
+                            if (data.type === 'task_complete') {
+                                updateStatus('complete', 'Task completed successfully');
+                            } else if (data.type === 'error') {
+                                updateStatus('error', 'Task failed with error');
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                addEvent('error', {
+                    error_type: 'ClientError',
+                    error: error.message
+                });
+                updateStatus('error', 'Failed to connect to API');
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+
+</html>

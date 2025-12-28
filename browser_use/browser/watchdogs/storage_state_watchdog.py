@@ -165,6 +165,10 @@ class StorageStateWatchdog(BaseWatchdog):
 		"""Save browser storage state to file."""
 		async with self._save_lock:
 			# Check if CDP client is available
+			if not self.browser_session._cdp_client_root:
+				self.logger.debug('[StorageStateWatchdog] Skip saving storage state: CDP client not initialized')
+				return
+
 			assert await self.browser_session.get_or_create_cdp_session(target_id=None)
 
 			save_path = path or self.browser_session.browser_profile.storage_state

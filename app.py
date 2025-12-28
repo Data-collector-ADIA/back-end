@@ -3,8 +3,7 @@ import json
 import logging
 import os
 from typing import AsyncGenerator, Any
-
-from browser_use import Agent, ChatGoogle, Browser
+from browser_use import Agent, Browser, BrowserConfig, ChatGoogle
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -112,7 +111,12 @@ async def run_agent_stream(prompt: str, max_steps: int = 100) -> AsyncGenerator[
 	# Initialize agent with Gemini
 	# GOOGLE_API_KEY should be set in environment or .env file
 	llm = ChatGoogle(model='gemini-flash-latest')
-	browser = Browser(headless=True)
+	browser = Browser(config=BrowserConfig(
+        cdp_url=cdp_url,
+        headless=True,
+        # This helps reduce token usage:
+        disable_security=True, 
+    ))
 	agent = Agent(
 		task=prompt,
 		llm=llm,
